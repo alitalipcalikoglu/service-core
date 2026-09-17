@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import Fastify from 'fastify';
 import { test } from 'node:test';
-import { createErrorHandler, jsonParser, metricsText, registerProbes } from '../src/fastify-helpers.js';
+import { createErrorHandler, jsonParser, metricsText, readServiceVersion, registerInfo, registerProbes, SERVICE_CORE_VERSION } from '../src/fastify-helpers.js';
 
 class DomainError extends Error {
   /** @param {string} code @param {number} statusCode @param {string} message @param {object} [details] */
@@ -130,4 +131,28 @@ test('registerProbes: checkReadiness may be async (notify\'s multi-channel verif
 test('metricsText: joins lines with a trailing newline', () => {
   assert.equal(metricsText(['a 1', 'b 2']), 'a 1\nb 2\n');
   assert.equal(metricsText([]), '\n');
+});
+
+test('SERVICE_CORE_VERSION: matches this package\'s own package.json (Stage 7)', () => {
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(SERVICE_CORE_VERSION, pkg.version);
+});
+
+test('readServiceVersion: reads the caller\'s own package.json version, not a hand-maintained copy (Stage 7)', () => {
+  assert.equal(readServiceVersion(import.meta.url), JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
+});
+
+test('registerInfo: returns the full contract, defaults apiVersion to v1 and schemaVersion/capabilities to the stateless-service shape (Stage 7)', async () => {
+  const app = Fastify({ logger: false });
+  registerInfo(app, { service: 'widgets', version: '2.3.1' });
+  const res = await app.inject({ method: 'GET', url: '/v1/info' });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.json(), { service: 'widgets', version: '2.3.1', apiVersion: 'v1', capabilities: [], schemaVersion: null, serviceCore: SERVICE_CORE_VERSION });
+});
+
+test('registerInfo: reports real capabilities and a stateful service\'s schemaVersion verbatim (Stage 7)', async () => {
+  const app = Fastify({ logger: false });
+  registerInfo(app, { service: 'notify', version: '1.0.0', capabilities: ['email', 'webhook'], schemaVersion: 3 });
+  const res = await app.inject({ method: 'GET', url: '/v1/info' });
+  assert.deepEqual(res.json(), { service: 'notify', version: '1.0.0', apiVersion: 'v1', capabilities: ['email', 'webhook'], schemaVersion: 3, serviceCore: SERVICE_CORE_VERSION });
 });

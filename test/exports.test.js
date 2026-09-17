@@ -45,6 +45,9 @@ test('every subpath resolves and exports its documented members', async () => {
   assert.equal(typeof fastifyHelpers.createErrorHandler, 'function');
   assert.equal(typeof fastifyHelpers.registerProbes, 'function');
   assert.equal(typeof fastifyHelpers.metricsText, 'function');
+  assert.equal(typeof fastifyHelpers.registerInfo, 'function');
+  assert.equal(typeof fastifyHelpers.readServiceVersion, 'function');
+  assert.equal(typeof fastifyHelpers.SERVICE_CORE_VERSION, 'string');
 
   const secrets = await import('../src/secret-box.js');
   assert.ok(secrets.SecretBox && typeof secrets.SecretBox.isSealed === 'function');

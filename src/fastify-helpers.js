@@ -3,6 +3,27 @@
  * service still builds its own `Fastify(...)` instance, since TLS options, body limits and the
  * request-id generator are per-service config, not infrastructure to centralize).
  */
+import { readFileSync } from 'node:fs';
+
+/**
+ * The version of the service-core copy actually installed and running right now — read from this
+ * package's own `package.json` at import time, never a string maintained by hand elsewhere. This
+ * is what `registerInfo` reports as `serviceCore`, so it can never drift from what is truly
+ * running (Stage 7).
+ */
+export const SERVICE_CORE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+
+/**
+ * Reads a service's own `version` out of its `package.json` at the repository root — every
+ * service has the identical `src/<file>.js` -> `../package.json` layout, so the caller just
+ * passes its own `import.meta.url` (Stage 7: this is what feeds `/v1/info`'s `version` field,
+ * instead of a second copy of the version hand-maintained in source).
+ * @param {string} importMetaUrl
+ * @returns {string}
+ */
+export function readServiceVersion(importMetaUrl) {
+  return JSON.parse(readFileSync(new URL('../package.json', importMetaUrl), 'utf8')).version;
+}
 
 /**
  * Tolerant `application/json` body parser: an empty body becomes `undefined` instead of a parse
@@ -106,4 +127,33 @@ export function registerProbes(app, checkReadiness, { cacheMs = 10_000, extra } 
  */
 export function metricsText(lines) {
   return `${lines.join('\n')}\n`;
+}
+
+/**
+ * Registers `GET /v1/info` (Stage 7): the cross-service contract for identifying a running
+ * instance and what it actually, currently supports. Public, unauthenticated, cheap — same
+ * pattern as `registerProbes`, meant for `stack status --matrix` and the console's About view as
+ * much as for a human hitting the URL.
+ *
+ * Field semantics (documented once here, not repeated per service — see `stack/docs/API_CONTRACT.md`):
+ * - `service`: the manifest id (e.g. `"notify"`), not a display label.
+ * - `version`: the service's own package semver — a release number, unrelated to the API contract.
+ * - `apiVersion`: the `/v1` HTTP contract version this instance serves. Independent of `version`:
+ *   a service can ship many package releases (`1.4.0`, `1.9.0`, ...) while `apiVersion` stays
+ *   `"v1"` the whole time, and only changes when the `/v1` contract itself is replaced wholesale.
+ * - `capabilities`: real, public, currently-supported behaviors only — deterministic (same input
+ *   state -> same list), lowercase, stable identifiers, each documented in the service's README.
+ *   Never a planned/future feature.
+ * - `schemaVersion`: the stateful service's real, currently-open database schema version (from
+ *   `Database#schemaVersion`, i.e. `PRAGMA user_version` — never hand-maintained). `null` for a
+ *   service with no database — the one, consistent stateless contract across every such service.
+ * - `serviceCore`: `SERVICE_CORE_VERSION` above — the copy of this package actually running,
+ *   `null` for a service (gateway) that doesn't depend on service-core at all.
+ * @param {import('fastify').FastifyInstance} app
+ * @param {{ service: string, version: string, apiVersion?: string, capabilities?: string[], schemaVersion?: number|null }} opts
+ */
+export function registerInfo(app, { service, version, apiVersion = 'v1', capabilities = [], schemaVersion = null }) {
+  app.get('/v1/info', { logLevel: 'warn' }, async () => ({
+    service, version, apiVersion, capabilities, schemaVersion, serviceCore: SERVICE_CORE_VERSION,
+  }));
 }
