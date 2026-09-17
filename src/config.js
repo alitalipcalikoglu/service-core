@@ -75,26 +75,30 @@ export class EnvReader {
 /**
  * Parse `id:secret[:role[:scopeList]]` entries, comma separated. Two current shapes are supported
  * by the same function depending on whether `roles` is passed:
- * - `roles` given and `scopePattern` given (ratelimit/search/flags today): role is the 3rd field,
- *   defaults to `readwrite`; a 4th field is a `+`-separated scope list validated against
- *   `scopePattern` (`null` scope means "every scope").
- * - `roles` given, no `scopePattern` (geo/audit/scheduler/shortlink/webhook-out today): role only,
+ * - `roles` given and `scopePattern` and/or `scopeValidate` given (ratelimit/search/flags today):
+ *   role is the 3rd field, defaults to `readwrite`; a 4th field is a `+`-separated scope list.
+ *   `scopePattern` rejects a malformed scope ("names an invalid `scopeNoun`"); `scopeValidate`
+ *   (e.g. flags checking against its own dynamic `FLAGS_ENVIRONMENTS` list, not a fixed shape)
+ *   rejects one not on the caller's list ("names unknown `scopeNoun`"). Both may be given; each is
+ *   checked when present. `null` scopes means "every scope".
+ * - `roles` given, neither given (geo/audit/scheduler/shortlink/webhook-out today): role only,
  *   `id:secret[:role]` — a 4th field is rejected, there is no scope concept for these services.
  * - `roles` omitted (auth/media/notify today): plain `id:secret`, no role or scope concept at all —
  *   every returned entry has `role: undefined, scopes: null`.
  * @param {string} raw
  * @param {string} envName Used only in error messages.
- * @param {{ roles?: readonly string[], scopePattern?: RegExp, scopeNoun?: string, minSecretLength?: number }} [opts]
+ * @param {{ roles?: readonly string[], scopePattern?: RegExp, scopeValidate?: (scope: string) => boolean, scopeNoun?: string, minSecretLength?: number }} [opts]
  * @returns {{ id: string, secret: string, role: string|undefined, scopes: string[]|null }[]}
  */
-export function parseApiKeys(raw, envName, { roles, scopePattern, scopeNoun = 'scope', minSecretLength = 32 } = {}) {
-  const maxParts = !roles ? 2 : (scopePattern ? 4 : 3);
+export function parseApiKeys(raw, envName, { roles, scopePattern, scopeValidate, scopeNoun = 'scope', minSecretLength = 32 } = {}) {
+  const scopesEnabled = Boolean(scopePattern || scopeValidate);
+  const maxParts = !roles ? 2 : (scopesEnabled ? 4 : 3);
   const keys = raw.split(',').map((s) => s.trim()).filter(Boolean).map((entry) => {
     const parts = entry.split(':');
     if (parts.length < 2 || parts.length > maxParts) {
       throw new ConfigError(!roles
         ? `${envName} entry "${entry.slice(0, 8)}…" must be id:secret`
-        : `${envName} entry "${entry.slice(0, 8)}…" must be id:secret[:role${scopePattern ? '[:scopes]' : ''}]`);
+        : `${envName} entry "${entry.slice(0, 8)}…" must be id:secret[:role${scopesEnabled ? '[:scopes]' : ''}]`);
     }
     const [id, secret, role, scopeList] = parts;
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new ConfigError(`${envName} id "${id}" must match [A-Za-z0-9_-]{1,64}`);
@@ -105,7 +109,10 @@ export function parseApiKeys(raw, envName, { roles, scopePattern, scopeNoun = 's
     let scopes = null;
     if (scopeList) {
       scopes = scopeList.split('+').map((s) => s.trim()).filter(Boolean);
-      if (scopePattern) for (const s of scopes) if (!scopePattern.test(s)) throw new ConfigError(`${envName} key "${id}" names an invalid ${scopeNoun} "${s}"`);
+      for (const s of scopes) {
+        if (scopePattern && !scopePattern.test(s)) throw new ConfigError(`${envName} key "${id}" names an invalid ${scopeNoun} "${s}"`);
+        if (scopeValidate && !scopeValidate(s)) throw new ConfigError(`${envName} key "${id}" names unknown ${scopeNoun} "${s}"`);
+      }
     }
     return { id, secret, role: effectiveRole, scopes };
   });

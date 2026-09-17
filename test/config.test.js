@@ -53,6 +53,14 @@ test('parseApiKeys: roles given, no scopePattern (geo/audit/scheduler/shortlink/
   assert.throws(() => parseApiKeys('id:' + 'a'.repeat(32) + ':read:extra', 'GEO_API_KEYS', { roles }), (/** @type {any} */ e) => /id:secret\[:role\]$/.test(e.message), 'no scope concept: message has no [:scopes] suffix, a 4th part is rejected outright');
 });
 
+test('parseApiKeys: scopeValidate against a dynamic list (flags\' FLAGS_ENVIRONMENTS, not a fixed pattern)', () => {
+  const roles = ['read', 'write', 'readwrite'];
+  const environments = ['dev', 'staging', 'prod'];
+  const [k] = parseApiKeys('id:' + 'a'.repeat(32) + ':read:dev+staging', 'FLAGS_API_KEYS', { roles, scopeValidate: (e) => environments.includes(e), scopeNoun: 'environment' });
+  assert.deepEqual(k.scopes, ['dev', 'staging']);
+  assert.throws(() => parseApiKeys('id:' + 'a'.repeat(32) + ':read:qa', 'FLAGS_API_KEYS', { roles, scopeValidate: (e) => environments.includes(e), scopeNoun: 'environment' }), (/** @type {any} */ e) => /names unknown environment "qa"/.test(e.message));
+});
+
 test('parseApiKeys: extra roles/scope-less services (ratelimit\'s "check" role, webhook-out\'s "publish" role) are just data', () => {
   const [k] = parseApiKeys('id:' + 'a'.repeat(32) + ':check', 'RATELIMIT_API_KEYS', { roles: ['check', 'read', 'write', 'readwrite'] });
   assert.equal(k.role, 'check');
