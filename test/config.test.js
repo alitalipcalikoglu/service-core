@@ -21,10 +21,15 @@ test('EnvReader: optional/required/integer/boolean/list', () => {
   assert.deepEqual(r.list('MISSING', 'x,y'), ['x', 'y'], 'explicit fallback (media\'s csv signature)');
 });
 
-test('parseApiKeys: roleless 2-part format (auth/media/notify today)', () => {
+test('parseApiKeys: roleless id:secret format (auth/media/notify today) — splits on the first ":" only', () => {
   const keys = parseApiKeys('svc:' + 's'.repeat(32), 'MEDIA_API_KEYS');
   assert.deepEqual(keys, [{ id: 'svc', secret: 's'.repeat(32), role: undefined, scopes: null }]);
-  assert.throws(() => parseApiKeys('svc:' + 's'.repeat(32) + ':role', 'MEDIA_API_KEYS'), ConfigError, 'a 3rd part is rejected when roles is not given');
+  // A secret may itself contain a colon (auth/media/notify's real parsing splits on the first ":"
+  // only, unlike role/scope mode); everything after the id's colon is the secret, verbatim.
+  const withColon = parseApiKeys('svc:' + 's'.repeat(30) + ':x', 'MEDIA_API_KEYS');
+  assert.equal(withColon[0].secret, 's'.repeat(30) + ':x');
+  assert.throws(() => parseApiKeys(':' + 's'.repeat(32), 'MEDIA_API_KEYS'), ConfigError, 'empty id is rejected');
+  assert.throws(() => parseApiKeys('svc-only', 'MEDIA_API_KEYS'), ConfigError, 'no colon at all is rejected');
 });
 
 test('parseApiKeys: role[:scopes] format (ratelimit/geo/flags/search/scheduler/webhook-out/shortlink/audit)', () => {
