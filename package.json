@@ -1,0 +1,37 @@
+{
+  "name": "@atc-web/service-core",
+  "version": "1.0.0",
+  "description": "Shared cross-cutting infrastructure for atc-web services: config parsing, SQLite base class, audit forwarding, API-key auth, trace context, outbound HTTP guard/signing, process lifecycle, Fastify helpers. No domain logic.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alitalipcalikoglu/service-core.git"
+  },
+  "type": "module",
+  "engines": { "node": ">=22.13" },
+  "exports": {
+    "./config": "./src/config.js",
+    "./db": "./src/db.js",
+    "./audit": "./src/audit-client.js",
+    "./auth": "./src/api-key-auth.js",
+    "./context": "./src/trace-context.js",
+    "./http": "./src/http.js",
+    "./lifecycle": "./src/lifecycle.js",
+    "./fastify": "./src/fastify-helpers.js"
+  },
+  "scripts": {
+    "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.js\"",
+    "typecheck": "tsc -p jsconfig.json"
+  },
+  "peerDependencies": {
+    "fastify": "5.12.4"
+  },
+  "peerDependenciesMeta": {
+    "fastify": { "optional": true }
+  },
+  "devDependencies": {
+    "@types/node": "22.20.3",
+    "fastify": "5.12.4",
+    "typescript": "7.0.2"
+  }
+}
