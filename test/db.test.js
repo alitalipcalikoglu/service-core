@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { ConfigError } from '../src/config.js';
 import { Database } from '../src/db.js';
@@ -157,5 +158,53 @@ test('Database: backupDir option redirects the pre-migration snapshot', () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
     rmSync(backupDir, { recursive: true, force: true });
+  }
+});
+
+test('Database: reopening at the latest version never re-invokes an already-applied migration callback', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'core-db-noreentry-'));
+  const path = join(dir, 'app.db');
+  try {
+    // No "IF NOT EXISTS": this SQL throws "table t already exists" if it is ever executed a second
+    // time against the same schema — a canary. It's a deliberately fragile migration precisely so
+    // that a bug reintroducing the migration loop on reopen (e.g. dropping the `current ===
+    // migrations.length` early return) would fail this test loudly, instead of the version-gate's
+    // absence hiding behind the unrelated schema_migrations PRIMARY KEY happening to also catch it.
+    class V1 extends Database {
+      static MIGRATIONS = ['CREATE TABLE t (id INTEGER PRIMARY KEY)'];
+    }
+    new V1(path).close();
+    assert.doesNotThrow(() => new V1(path).close(), 'reopening never re-runs migrations[0]; the fragile CREATE TABLE proves it, not just the row count');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Database: the schema_migrations PRIMARY KEY is a corruption guard, not the normal idempotency mechanism', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'core-db-corrupt-'));
+  const path = join(dir, 'app.db');
+  try {
+    // This migration IS idempotent (IF NOT EXISTS), unlike the canary above — so that if user_version
+    // itself is wrong, the SQL re-executes silently and it is specifically the schema_migrations
+    // INSERT's version PRIMARY KEY that has to catch the inconsistency.
+    class V1 extends Database {
+      static MIGRATIONS = ['CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY)'];
+    }
+    new V1(path).close();
+
+    // Simulate corruption: roll user_version back to 0 by hand while schema_migrations still holds
+    // the v1 row. Nothing in normal operation does this; the version-gate alone can't detect it, since
+    // it only ever reads user_version.
+    const raw = new DatabaseSync(path);
+    raw.exec('PRAGMA user_version = 0');
+    raw.close();
+
+    assert.throws(
+      () => new V1(path),
+      (/** @type {any} */ err) => /UNIQUE constraint failed|PRIMARY KEY/i.test(err.message),
+      'the version gate is fooled by the corrupted user_version and attempts migrations[0] again; the idempotent SQL succeeds silently, and it is the schema_migrations(version) PRIMARY KEY that actually rejects the re-application',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
