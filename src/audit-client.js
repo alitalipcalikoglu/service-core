@@ -5,13 +5,43 @@ import { randomUUID } from 'node:crypto';
  * @typedef {{ type: string, id: string, name?: string }} AuditParty
  * @typedef {{ action: string, outcome?: 'success'|'failure'|'denied', actor?: AuditParty, target?: AuditParty, ip?: string, userAgent?: string, requestId?: string, meta?: object }} AuditEvent
  * @typedef {{ action: string, target?: (request: import('fastify').FastifyRequest, body: any) => AuditParty|null|undefined, meta?: (request: import('fastify').FastifyRequest, body: any) => object|undefined }} AuditRouteConfig
+ * @typedef {object} OutboxSource
+ *   A durable outbox this client drains instead of its in-memory buffer — see the `outbox`
+ *   constructor option. The caller owns the table and inserts rows itself, in the same DB
+ *   transaction as whatever business mutation the event describes (this client never writes to
+ *   it, only reads and marks rows sent); this is what makes delivery survive a crash between
+ *   commit and the network call, at the cost of at-least-once (not exactly-once) delivery — a row
+ *   whose send succeeded but whose `markSent` never ran (a crash in between) is resent next flush.
+ *   The audit service's own `UNIQUE(source, client_id)` on the posted event `id` is what makes that
+ *   resend safe: same `id` every attempt (it's the row's stable primary key, generated once at
+ *   insert), so a duplicate delivery is a no-op on the receiving end, not a duplicate record.
+ * @property {(limit: number) => { id: string, at: number, payload: string }[]} pending
+ *   Not-yet-sent rows, oldest first. `payload` is the `AuditEvent` fields (everything except `id`
+ *   and `at`, which have their own columns) as a JSON string.
+ * @property {(ids: string[]) => void} markSent Mark these ids delivered. Must be safe to call with
+ *   ids already marked (a crash-and-retry can call it, or attempt to, more than once).
+ * @property {() => void} [purge] Delete old sent rows per whatever retention window the caller
+ *   configured; called once per flush tick. Optional — omit to keep every sent row forever.
  */
 
 /**
  * Forwards audit events to the audit service without ever slowing down or failing the business
- * request: events are buffered in memory, flushed in batches on a timer, retried with backoff and
- * idempotent ids, and dropped with a log line when the service stays unreachable or the buffer is
- * full. With no target configured every call is a no-op.
+ * request. Two source modes, chosen by which constructor option is set:
+ *
+ * - **buffer** (default): `record()` pushes into an in-memory array; a timer flushes it in batches,
+ *   retried with backoff. Simple and enough for events with no durability requirement of their
+ *   own — a crash between `record()` and the next flush loses that event, same as losing any other
+ *   unpersisted in-memory state. This is every service's mode except where noted below.
+ * - **outbox** (`{ outbox: OutboxSource }`): for events where losing one silently is not
+ *   acceptable — the caller durably inserts the event into its own DB (in the same transaction as
+ *   the business mutation the event is *about*, so the two can never disagree: commit lands both
+ *   or neither, rollback leaves neither) and this client's timer drains that table instead of an
+ *   in-memory buffer. `record()` is not used in this mode — inserting is the caller's job, exactly
+ *   because it needs to happen inside a transaction this client has no part of.
+ *
+ * Either mode: dropped with a log line, not retried forever, when the target rejects a batch
+ * outright (4xx other than 429) or the in-memory buffer is full; with no target configured every
+ * call is a no-op.
  */
 export class AuditClient {
   static MAX_BUFFER = 5_000;
@@ -26,8 +56,9 @@ export class AuditClient {
    * @param {AuditLogger} [o.logger]
    * @param {typeof fetch} [o.fetch]
    * @param {(ms: number) => Promise<void>} [o.sleep]
+   * @param {OutboxSource} [o.outbox] Switches this client to outbox mode — see the class doc.
    */
-  constructor({ target, flushMs = 2_000, batchSize = 200, timeoutMs = 5_000, logger = console, fetch: fetchImpl = fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
+  constructor({ target, flushMs = 2_000, batchSize = 200, timeoutMs = 5_000, logger = console, fetch: fetchImpl = fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), outbox }) {
     this.target = target ? { url: target.url.replace(/\/+$/, ''), apiKey: target.apiKey } : null;
     this.flushMs = flushMs;
     this.batchSize = batchSize;
@@ -35,6 +66,7 @@ export class AuditClient {
     this.logger = logger;
     this.fetch = fetchImpl;
     this.sleep = sleep;
+    this.outbox = outbox ?? null;
     /** @type {(AuditEvent & { id: string, at: string })[]} */
     this.buffer = [];
     /** @type {NodeJS.Timeout|null} */
@@ -59,10 +91,13 @@ export class AuditClient {
   }
 
   /**
-   * Queue one event. Returns false when forwarding is disabled.
+   * Queue one event. Returns false when forwarding is disabled. Not for outbox mode — the whole
+   * point of that mode is that the caller inserts the row itself, inside its own transaction; this
+   * throws rather than silently accepting an event that would bypass that guarantee.
    * @param {AuditEvent} e
    */
   record(e) {
+    if (this.outbox) throw new Error('AuditClient.record() is not used in outbox mode — insert into the outbox table directly, in the same transaction as the business mutation');
     if (!this.target) return false;
     if (this.buffer.length >= AuditClient.MAX_BUFFER) {
       this.buffer.shift();
@@ -81,9 +116,14 @@ export class AuditClient {
     this.timer.unref();
   }
 
-  /** Send everything buffered, batch by batch. A batch that keeps failing stays for the next flush. */
+  /**
+   * Send everything pending, batch by batch — from the outbox table in outbox mode, from the
+   * in-memory buffer otherwise. A batch that keeps failing stays for the next flush, in either mode.
+   */
   async flush() {
-    if (!this.target || this.flushing || this.buffer.length === 0) return;
+    if (!this.target || this.flushing) return;
+    if (this.outbox) return this.#flushOutbox(this.outbox);
+    if (this.buffer.length === 0) return;
     this.flushing = true;
     try {
       while (this.buffer.length) {
@@ -91,6 +131,24 @@ export class AuditClient {
         const ok = await this.#send(events);
         if (!ok) return;
         this.buffer.splice(0, events.length);
+      }
+    } finally {
+      this.flushing = false;
+    }
+  }
+
+  /** @param {OutboxSource} outbox */
+  async #flushOutbox(outbox) {
+    this.flushing = true;
+    try {
+      outbox.purge?.();
+      for (;;) {
+        const rows = outbox.pending(this.batchSize);
+        if (rows.length === 0) return;
+        const events = rows.map((r) => ({ id: r.id, at: new Date(r.at).toISOString(), ...JSON.parse(r.payload) }));
+        const ok = await this.#send(events);
+        if (!ok) return;
+        outbox.markSent(rows.map((r) => r.id));
       }
     } finally {
       this.flushing = false;

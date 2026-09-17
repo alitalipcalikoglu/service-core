@@ -127,13 +127,18 @@ export class Database {
   }
 
   /**
-   * Run `fn` inside a write transaction; rolls back on throw.
+   * Run `fn` inside a write transaction; rolls back on throw. SQLite has no nested transactions —
+   * calling this again while already inside one throws rather than silently opening a second
+   * `BEGIN`; check {@link inTransaction} first if a method needs to work both standalone and inside
+   * a caller's already-open transaction (see `EventStore`-style outbox inserts in `auth`/`console`).
    * @template T
    * @param {() => T} fn
    * @returns {T}
    */
   transaction(fn) {
+    if (this.#inTransaction) throw new Error('Database.transaction: already inside a transaction (no nested transactions); check db.inTransaction first');
     this.raw.exec('BEGIN IMMEDIATE');
+    this.#inTransaction = true;
     try {
       const out = fn();
       this.raw.exec('COMMIT');
@@ -141,8 +146,18 @@ export class Database {
     } catch (err) {
       this.raw.exec('ROLLBACK');
       throw err;
+    } finally {
+      this.#inTransaction = false;
     }
   }
+
+  /** True while a {@link transaction} callback is running on this connection. */
+  get inTransaction() {
+    return this.#inTransaction;
+  }
+
+  /** @type {boolean} */
+  #inTransaction = false;
 
   /** Cheap liveness probe; throws if the connection is unusable. */
   ping() {

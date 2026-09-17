@@ -15,7 +15,7 @@ test('package.json declares the exact subpaths this package actually has real ad
   // assumption gateway (or some other service) would adopt it, but gateway was never in Stage 2's
   // adoption order and no service ended up needing it. Zero real consumers -> removed before
   // Stage 2 closed rather than shipped as a speculative, unused abstraction.
-  assert.deepEqual(Object.keys(pkg.exports).sort(), ['./audit', './auth', './config', './db', './fastify', './http', './lifecycle'].sort());
+  assert.deepEqual(Object.keys(pkg.exports).sort(), ['./audit', './auth', './config', './db', './fastify', './http', './lifecycle', './secrets'].sort());
 });
 
 test('every subpath resolves and exports its documented members', async () => {
@@ -45,6 +45,9 @@ test('every subpath resolves and exports its documented members', async () => {
   assert.equal(typeof fastifyHelpers.createErrorHandler, 'function');
   assert.equal(typeof fastifyHelpers.registerProbes, 'function');
   assert.equal(typeof fastifyHelpers.metricsText, 'function');
+
+  const secrets = await import('../src/secret-box.js');
+  assert.ok(secrets.SecretBox && typeof secrets.SecretBox.isSealed === 'function');
 });
 
 test('each exports entry points at a file that exists', () => {

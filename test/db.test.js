@@ -208,3 +208,21 @@ test('Database: the schema_migrations PRIMARY KEY is a corruption guard, not the
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('Database: inTransaction reflects the connection state, and nested transaction() throws instead of nesting BEGIN', () => {
+  class TestDb extends Database {
+    static MIGRATIONS = ['CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)'];
+  }
+  const db = new TestDb(':memory:');
+  assert.equal(db.inTransaction, false);
+  db.transaction(() => {
+    assert.equal(db.inTransaction, true);
+    assert.throws(() => db.transaction(() => {}), /already inside a transaction/);
+    assert.equal(db.inTransaction, true, 'the failed nested attempt did not clear the outer flag');
+  });
+  assert.equal(db.inTransaction, false, 'cleared after the outer transaction commits');
+
+  assert.throws(() => db.transaction(() => { throw new Error('boom'); }), /boom/);
+  assert.equal(db.inTransaction, false, 'cleared after a rolled-back transaction too');
+  db.close();
+});
