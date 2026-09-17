@@ -109,6 +109,17 @@ test('registerProbes: invalidate() forces the next /ready to re-check immediatel
   assert.equal(calls, 2);
 });
 
+test('registerProbes: extra() fields are merged into the healthy /ready body (scheduler/webhook-out\'s worker status)', async () => {
+  const app = Fastify({ logger: false });
+  let running = true;
+  registerProbes(app, () => {}, { extra: () => ({ worker: running ? 'running' : 'stopped' }) });
+  const ok = await app.inject({ method: 'GET', url: '/ready' });
+  assert.deepEqual(ok.json(), { status: 'ok', worker: 'running' });
+  running = false;
+  const stopped = await app.inject({ method: 'GET', url: '/ready' });
+  assert.deepEqual(stopped.json(), { status: 'ok', worker: 'stopped' });
+});
+
 test('registerProbes: checkReadiness may be async (notify\'s multi-channel verify)', async () => {
   const app = Fastify({ logger: false });
   registerProbes(app, async () => { await new Promise((r) => setTimeout(r, 5)); });

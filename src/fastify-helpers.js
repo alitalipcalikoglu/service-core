@@ -62,12 +62,14 @@ export function createErrorHandler(DomainErrorClass, { extra } = {}) {
  * @param {import('fastify').FastifyInstance} app
  * @param {() => (unknown|Promise<unknown>)} checkReadiness Only throwing means unhealthy; any
  *   return value (including `undefined`) means healthy — the return value itself is not inspected.
- * @param {{ cacheMs?: number }} [opts]
+ * @param {{ cacheMs?: number, extra?: () => Record<string, unknown> }} [opts] `extra`, when given,
+ *   is merged into the healthy `/ready` body — scheduler and webhook-out both add a `worker:
+ *   'running'|'stopped'` field this way; it is never consulted to decide health, only shown.
  * @returns {{ invalidate: () => void }} `invalidate()` forces the next `/ready` to re-check rather
  *   than serve a cached verdict — geo calls this right after an MMDB reload, so a caller polling
  *   `/ready` learns about a just-failed reload immediately instead of within the cache window.
  */
-export function registerProbes(app, checkReadiness, { cacheMs = 10_000 } = {}) {
+export function registerProbes(app, checkReadiness, { cacheMs = 10_000, extra } = {}) {
   /** @type {{ at: number, ok: boolean, error: string }} */
   let readyCache = { at: 0, ok: false, error: '' };
 
@@ -91,7 +93,7 @@ export function registerProbes(app, checkReadiness, { cacheMs = 10_000 } = {}) {
       app.log.warn({ error: ready.error }, 'readiness check failed');
       return reply.code(503).send({ status: 'unavailable', error: ready.error });
     }
-    return { status: 'ok' };
+    return { status: 'ok', ...extra?.() };
   });
 
   return { invalidate: () => { readyCache = { ...readyCache, at: 0 }; } };
