@@ -30,6 +30,9 @@ test('parseApiKeys: roleless id:secret format (auth/media/notify today) — spli
   assert.equal(withColon[0].secret, 's'.repeat(30) + ':x');
   assert.throws(() => parseApiKeys(':' + 's'.repeat(32), 'MEDIA_API_KEYS'), ConfigError, 'empty id is rejected');
   assert.throws(() => parseApiKeys('svc-only', 'MEDIA_API_KEYS'), ConfigError, 'no colon at all is rejected');
+  // auth/media/notify never enforced secret uniqueness (only id uniqueness); role/scope mode does.
+  assert.doesNotThrow(() => parseApiKeys(`a:${'s'.repeat(32)},b:${'s'.repeat(32)}`, 'MEDIA_API_KEYS'), 'roleless mode allows two ids sharing one secret');
+  assert.throws(() => parseApiKeys(`a:${'s'.repeat(32)}:read,b:${'s'.repeat(32)}:read`, 'X_API_KEYS', { roles: ['read', 'readwrite'] }), ConfigError, 'role mode still rejects a shared secret');
 });
 
 test('parseApiKeys: role[:scopes] format (ratelimit/geo/flags/search/scheduler/webhook-out/shortlink/audit)', () => {

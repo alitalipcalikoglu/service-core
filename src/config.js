@@ -130,7 +130,8 @@ export function parseApiKeys(raw, envName, { roles, scopePattern, scopeValidate,
   });
   if (keys.length === 0) throw new ConfigError(`${envName} must contain at least one key`);
   if (new Set(keys.map((k) => k.id)).size !== keys.length) throw new ConfigError(`${envName} ids must be unique`);
-  if (new Set(keys.map((k) => k.secret)).size !== keys.length) throw new ConfigError(`${envName} secrets must be unique`);
+  // Roleless mode (auth/media/notify) never checked secret uniqueness; role/scope mode always has.
+  if (roles && new Set(keys.map((k) => k.secret)).size !== keys.length) throw new ConfigError(`${envName} secrets must be unique`);
   return keys;
 }
 
