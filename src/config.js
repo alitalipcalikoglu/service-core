@@ -85,12 +85,15 @@ export class EnvReader {
  *   `id:secret[:role]` — a 4th field is rejected, there is no scope concept for these services.
  * - `roles` omitted (auth/media/notify today): plain `id:secret`, no role or scope concept at all —
  *   every returned entry has `role: undefined, scopes: null`.
+ * `roleErrorMessage` overrides the bad-role message text (default: "must be one of a, b, c") for a
+ * service whose pre-extraction wording must stay byte-identical (search: "must be a, b or c"; flags
+ * had the same shape) — a compatibility adapter, not a new validation rule.
  * @param {string} raw
  * @param {string} envName Used only in error messages.
- * @param {{ roles?: readonly string[], scopePattern?: RegExp, scopeValidate?: (scope: string) => boolean, scopeNoun?: string, minSecretLength?: number }} [opts]
+ * @param {{ roles?: readonly string[], scopePattern?: RegExp, scopeValidate?: (scope: string) => boolean, scopeNoun?: string, minSecretLength?: number, roleErrorMessage?: (roles: readonly string[]) => string }} [opts]
  * @returns {{ id: string, secret: string, role: string|undefined, scopes: string[]|null }[]}
  */
-export function parseApiKeys(raw, envName, { roles, scopePattern, scopeValidate, scopeNoun = 'scope', minSecretLength = 32 } = {}) {
+export function parseApiKeys(raw, envName, { roles, scopePattern, scopeValidate, scopeNoun = 'scope', minSecretLength = 32, roleErrorMessage } = {}) {
   const scopesEnabled = Boolean(scopePattern || scopeValidate);
   const maxParts = !roles ? 2 : (scopesEnabled ? 4 : 3);
   const keys = raw.split(',').map((s) => s.trim()).filter(Boolean).map((entry) => {
@@ -105,7 +108,7 @@ export function parseApiKeys(raw, envName, { roles, scopePattern, scopeValidate,
     if (secret.length < minSecretLength) throw new ConfigError(`${envName} secret for "${id}" must be at least ${minSecretLength} characters`);
     if (!roles) return { id, secret, role: undefined, scopes: null };
     const effectiveRole = role || 'readwrite';
-    if (!roles.includes(effectiveRole)) throw new ConfigError(`${envName} role for "${id}" must be one of ${roles.join(', ')}`);
+    if (!roles.includes(effectiveRole)) throw new ConfigError(`${envName} role for "${id}" ${roleErrorMessage ? roleErrorMessage(roles) : `must be one of ${roles.join(', ')}`}`);
     let scopes = null;
     if (scopeList) {
       scopes = scopeList.split('+').map((s) => s.trim()).filter(Boolean);

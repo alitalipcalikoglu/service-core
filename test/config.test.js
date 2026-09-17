@@ -38,6 +38,7 @@ test('parseApiKeys: role[:scopes] format (ratelimit/geo/flags/search/scheduler/w
   assert.deepEqual(k2.scopes, ['foo', 'bar']);
 
   assert.throws(() => parseApiKeys('id:' + 'a'.repeat(32) + ':bogus', 'X_API_KEYS', { roles }), ConfigError, 'role not in roles list');
+  assert.throws(() => parseApiKeys('id:' + 'a'.repeat(32) + ':bogus', 'X_API_KEYS', { roles, roleErrorMessage: (rs) => `must be ${rs.slice(0, -1).join(', ')} or ${rs.at(-1)}` }), (/** @type {any} */ e) => /must be read, write or readwrite/.test(e.message), 'roleErrorMessage overrides the default wording (search/flags/shortlink compat)');
   assert.throws(() => parseApiKeys('id:' + 'a'.repeat(32) + ':read:BAD', 'X_API_KEYS', { roles, scopePattern: /^[a-z]+$/ }), ConfigError, 'scope fails pattern');
   assert.throws(() => parseApiKeys('id:' + 'a'.repeat(32) + ':read:BAD', 'RATELIMIT_API_KEYS', { roles, scopePattern: /^[a-z]+$/, scopeNoun: 'policy' }), (/** @type {any} */ e) => /invalid policy/.test(e.message), 'scopeNoun customizes the error wording per service (ratelimit says "policy", search says "index")');
   assert.throws(() => parseApiKeys('short:tooshort', 'X_API_KEYS', { roles }), ConfigError, 'secret under minSecretLength');
