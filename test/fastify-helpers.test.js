@@ -90,6 +90,25 @@ test('registerProbes: /health always ok; /ready 503 with error until the check p
   assert.equal(calls, 2);
 });
 
+test('registerProbes: invalidate() forces the next /ready to re-check immediately (geo\'s post-reload behavior)', async () => {
+  let healthy = true;
+  let calls = 0;
+  const app = Fastify({ logger: false });
+  const { invalidate } = registerProbes(app, () => { calls++; if (!healthy) throw new Error('reload failed'); }, { cacheMs: 10_000 });
+  await app.inject({ method: 'GET', url: '/ready' });
+  assert.equal(calls, 1);
+
+  healthy = false;
+  const stillCached = await app.inject({ method: 'GET', url: '/ready' });
+  assert.equal(stillCached.statusCode, 200, 'far inside the 10s cache window, not re-checked yet');
+  assert.equal(calls, 1);
+
+  invalidate();
+  const afterInvalidate = await app.inject({ method: 'GET', url: '/ready' });
+  assert.equal(afterInvalidate.statusCode, 503, 'invalidate() bypassed the cache immediately');
+  assert.equal(calls, 2);
+});
+
 test('registerProbes: checkReadiness may be async (notify\'s multi-channel verify)', async () => {
   const app = Fastify({ logger: false });
   registerProbes(app, async () => { await new Promise((r) => setTimeout(r, 5)); });

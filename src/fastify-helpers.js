@@ -63,6 +63,9 @@ export function createErrorHandler(DomainErrorClass, { extra } = {}) {
  * @param {() => (unknown|Promise<unknown>)} checkReadiness Only throwing means unhealthy; any
  *   return value (including `undefined`) means healthy — the return value itself is not inspected.
  * @param {{ cacheMs?: number }} [opts]
+ * @returns {{ invalidate: () => void }} `invalidate()` forces the next `/ready` to re-check rather
+ *   than serve a cached verdict — geo calls this right after an MMDB reload, so a caller polling
+ *   `/ready` learns about a just-failed reload immediately instead of within the cache window.
  */
 export function registerProbes(app, checkReadiness, { cacheMs = 10_000 } = {}) {
   /** @type {{ at: number, ok: boolean, error: string }} */
@@ -90,6 +93,8 @@ export function registerProbes(app, checkReadiness, { cacheMs = 10_000 } = {}) {
     }
     return { status: 'ok' };
   });
+
+  return { invalidate: () => { readyCache = { ...readyCache, at: 0 }; } };
 }
 
 /**
