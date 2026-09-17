@@ -43,3 +43,51 @@ test('SecretBox.isSealed: distinguishes the sealed format from legacy plaintext'
   assert.equal(SecretBox.isSealed('JBSWY3DPEHPK3PXP'), false, 'a plaintext base32 TOTP secret is not sealed');
   assert.equal(SecretBox.isSealed(''), false);
 });
+
+test('regression: a v1 ciphertext sealed before Stage 4.1 (frozen fixture, no keyId support) still opens byte-for-byte the same — webhook-out\'s existing sealed secrets must never break', () => {
+  const key = Buffer.alloc(32, 7); // the exact key used to produce the frozen fixture below
+  const box = new SecretBox(key); // no keyId — this is exactly how webhook-out constructs it
+  const frozen = 'v1.AwMDAwMDAwMDAwMD.Q4zMeT9GcyQTODcpmTLSf4hfkorA.5wP7NLPXmgWtgE_K0gkJGw';
+  assert.equal(box.open(frozen), 'frozen-fixture-secret');
+});
+
+test('SecretBox: unchanged default behavior when no keyId is given — seal() still produces plain v1, open() has no key to check', () => {
+  const box = new SecretBox(randomBytes(32));
+  assert.equal(box.keyId, null);
+  const sealed = box.seal('x');
+  assert.match(sealed, /^v1\./);
+  assert.equal(box.open(sealed), 'x');
+});
+
+test('SecretBox v2 (keyed): seal() embeds the given keyId, open() accepts a matching-id value', () => {
+  const key = randomBytes(32);
+  const keyId = SecretBox.keyId(key);
+  const box = new SecretBox(key, { keyId });
+  const sealed = box.seal('secret');
+  assert.match(sealed, /^v2\./);
+  assert.equal(SecretBox.peekKeyId(sealed), keyId);
+  assert.equal(box.open(sealed), 'secret');
+  assert.equal(SecretBox.isSealed(sealed), true);
+});
+
+test('SecretBox v2: open() fail-closed refuses a value sealed under a different key id, before even attempting decryption', () => {
+  const keyA = randomBytes(32);
+  const keyB = randomBytes(32);
+  const boxA = new SecretBox(keyA, { keyId: SecretBox.keyId(keyA) });
+  const boxBWrongId = new SecretBox(keyB, { keyId: 'not-the-real-id' });
+  const sealedByA = boxA.seal('secret');
+  assert.throws(() => boxBWrongId.open(sealedByA), /this box is key "not-the-real-id"/);
+});
+
+test('SecretBox.keyId: deterministic, non-secret fingerprint — same key always yields the same id, different keys (almost certainly) differ', () => {
+  const key = randomBytes(32);
+  assert.equal(SecretBox.keyId(key), SecretBox.keyId(Buffer.from(key)));
+  assert.notEqual(SecretBox.keyId(key), SecretBox.keyId(randomBytes(32)));
+  assert.match(SecretBox.keyId(key), /^[0-9a-f]{16}$/);
+});
+
+test('SecretBox.peekKeyId: null for v1 and for anything not sealed at all', () => {
+  const box = new SecretBox(randomBytes(32));
+  assert.equal(SecretBox.peekKeyId(box.seal('x')), null, 'v1 has no embedded id');
+  assert.equal(SecretBox.peekKeyId('not sealed'), null);
+});

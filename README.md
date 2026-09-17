@@ -29,7 +29,7 @@ Each is a separate `exports` subpath so a service only pulls in what it uses. "A
 | `@atc-web/service-core/lifecycle` | `Lifecycle.install(...)` — signal handling, ordered shutdown steps, force-exit | 12/12 |
 | `@atc-web/service-core/fastify` | `jsonParser`, `createErrorHandler`, `registerProbes`, `metricsText` | 11/12 (not console — see below) |
 | `@atc-web/service-core/http` | `HttpCaller`, `CallError`, `NetGuard`, `NetGuardError`, `Signer` | 2/12 (scheduler, webhook-out — the only two services that make caller-supplied outbound HTTP calls) |
-| `@atc-web/service-core/secrets` | `SecretBox` — AES-256-GCM sealing of a small secret at rest, versioned format, key supplied by the caller (never stored in the database) | 1/12 (webhook-out) |
+| `@atc-web/service-core/secrets` | `SecretBox` — AES-256-GCM sealing of a small secret at rest, versioned format (`v1.` single-key; `v2.` embeds a `keyId` for a caller managing more than one key — e.g. rotation), key supplied by the caller (never stored in the database) | 2/12 (webhook-out on `v1.`, console on `v2.` — its own `TotpKeyring` builds the current/previous rotation logic on top; this stays a single-key primitive) |
 
 Every module's own JSDoc explains the exact contract and which per-service behavior stays local (e.g. `ApiKeyAuth`'s `decorate` option, `Lifecycle`'s caller-supplied `steps` order, `createErrorHandler`'s `extra` hook).
 
