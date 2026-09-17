@@ -1,6 +1,16 @@
+import { basename, dirname, join } from 'node:path';
 import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { ConfigError } from './config.js';
+
+const MIGRATIONS_TABLE = `
+  CREATE TABLE IF NOT EXISTS schema_migrations (
+    version     INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL,
+    applied_at  INTEGER NOT NULL,
+    duration_ms INTEGER NOT NULL
+  )
+`;
 
 /**
  * SQLite connection with schema migrations applied on open. Every service subclasses this with its
@@ -16,7 +26,22 @@ import { DatabaseSync } from 'node:sqlite';
  *
  * `#migrate()` reads `MIGRATIONS` off the actual subclass (`this.constructor.MIGRATIONS`), so a
  * service that defines no migrations at all (there is none today, but the base class must not
- * assume one exists) simply gets an empty array via the default below.
+ * assume one exists) simply gets an empty array via the default below. A fresh database (no prior
+ * `user_version`) and an existing one being upgraded run through this exact same loop — there is no
+ * separate "create" path.
+ *
+ * Migration tracking is deterministic and layered two ways: `PRAGMA user_version` is the fast-path
+ * check (unchanged from before), and every applied migration also gets a row in `schema_migrations`
+ * (`version INTEGER PRIMARY KEY`, so a second attempt to record the same version is a constraint
+ * violation, not silent). Each migration runs in its own `BEGIN`/`COMMIT`; a failure rolls back that
+ * one migration and throws, leaving `user_version` at the last successfully applied version — the
+ * service then fails to start rather than run against a half-migrated schema. Before the first
+ * pending migration on a database that already has data (`user_version > 0`), the file is snapshotted
+ * with `VACUUM INTO` to `<path>.pre-v<current>-<timestamp>` (skipped for `:memory:` and for a brand
+ * new database, since there is nothing to protect yet) — `VACUUM INTO` takes its own consistent read
+ * snapshot, so it is safe under WAL with concurrent readers. If the database's `user_version` is
+ * already ahead of what this build's `MIGRATIONS` supports, the constructor throws `ConfigError`
+ * instead of touching anything — an old build must never run against a newer schema.
  *
  * This class does not cache prepared statements — every service already had its own idiom for that
  * (either a fixed set of named statements prepared once, or an ad hoc `Map` for dynamic SQL) and
@@ -30,33 +55,70 @@ export class Database {
   /** @type {readonly string[]} */
   static MIGRATIONS = [];
 
-  /** @param {string} path File path, or ":memory:". */
-  constructor(path) {
+  /**
+   * @param {string} path File path, or ":memory:".
+   * @param {{ backupDir?: string }} [opts] `backupDir` overrides where the pre-migration snapshot is
+   *   written; defaults to the database file's own directory.
+   */
+  constructor(path, opts = {}) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
+    /** @readonly */
+    this.path = path;
     /** @readonly */
     this.raw = new DatabaseSync(path);
     this.raw.exec('PRAGMA journal_mode = WAL');
     this.raw.exec('PRAGMA synchronous = NORMAL');
     this.raw.exec('PRAGMA busy_timeout = 5000');
     this.raw.exec('PRAGMA foreign_keys = ON');
-    this.#migrate();
+    /** Path of the pre-migration snapshot taken during this open, if any. @type {string|null} */
+    this.lastBackupPath = null;
+    this.#migrate(opts.backupDir);
   }
 
-  #migrate() {
+  /** Current `PRAGMA user_version` — the applied schema version. */
+  get schemaVersion() {
+    return /** @type {{ user_version: number }} */ (this.raw.prepare('PRAGMA user_version').get()).user_version;
+  }
+
+  /** @param {string|undefined} backupDir */
+  #migrate(backupDir) {
     /** @type {readonly string[]} */
     const migrations = /** @type {typeof Database} */ (this.constructor).MIGRATIONS;
-    const { user_version: current } = /** @type {{ user_version: number }} */ (this.raw.prepare('PRAGMA user_version').get());
+    this.raw.exec(MIGRATIONS_TABLE);
+    const current = this.schemaVersion;
+    if (current > migrations.length) {
+      throw new ConfigError(`database is newer than this build supports (schema v${current}, build supports up to v${migrations.length}); refusing to open ${this.path}`);
+    }
+    if (current === migrations.length) return;
+    this.#backup(current, backupDir);
     for (let v = current; v < migrations.length; v++) {
+      const startedAt = Date.now();
       this.raw.exec('BEGIN');
       try {
         this.raw.exec(migrations[v]);
         this.raw.exec(`PRAGMA user_version = ${v + 1}`);
+        this.raw.prepare('INSERT INTO schema_migrations (version, name, applied_at, duration_ms) VALUES (?, ?, ?, ?)').run(v + 1, `v${v + 1}`, Date.now(), Date.now() - startedAt);
         this.raw.exec('COMMIT');
       } catch (err) {
         this.raw.exec('ROLLBACK');
         throw err;
       }
     }
+  }
+
+  /**
+   * Snapshot the file before the first pending migration touches it. No-op for `:memory:` or a
+   * brand new database (`currentVersion === 0`): there is no existing data to protect.
+   * @param {number} currentVersion
+   * @param {string|undefined} backupDir
+   */
+  #backup(currentVersion, backupDir) {
+    if (this.path === ':memory:' || currentVersion === 0) return;
+    const dir = backupDir || dirname(this.path);
+    mkdirSync(dir, { recursive: true });
+    const dest = join(dir, `${basename(this.path)}.pre-v${currentVersion}-${Date.now()}`);
+    this.raw.prepare('VACUUM INTO ?').run(dest);
+    this.lastBackupPath = dest;
   }
 
   /** @param {string} sql */
