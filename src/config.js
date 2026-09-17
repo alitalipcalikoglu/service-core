@@ -82,10 +82,10 @@ export class EnvReader {
  *   every returned entry has `role: undefined, scopes: null`.
  * @param {string} raw
  * @param {string} envName Used only in error messages.
- * @param {{ roles?: readonly string[], scopePattern?: RegExp, minSecretLength?: number }} [opts]
+ * @param {{ roles?: readonly string[], scopePattern?: RegExp, scopeNoun?: string, minSecretLength?: number }} [opts]
  * @returns {{ id: string, secret: string, role: string|undefined, scopes: string[]|null }[]}
  */
-export function parseApiKeys(raw, envName, { roles, scopePattern, minSecretLength = 32 } = {}) {
+export function parseApiKeys(raw, envName, { roles, scopePattern, scopeNoun = 'scope', minSecretLength = 32 } = {}) {
   const maxParts = roles ? 4 : 2;
   const keys = raw.split(',').map((s) => s.trim()).filter(Boolean).map((entry) => {
     const parts = entry.split(':');
@@ -103,7 +103,7 @@ export function parseApiKeys(raw, envName, { roles, scopePattern, minSecretLengt
     let scopes = null;
     if (scopeList) {
       scopes = scopeList.split('+').map((s) => s.trim()).filter(Boolean);
-      if (scopePattern) for (const s of scopes) if (!scopePattern.test(s)) throw new ConfigError(`${envName} key "${id}" names an invalid scope "${s}"`);
+      if (scopePattern) for (const s of scopes) if (!scopePattern.test(s)) throw new ConfigError(`${envName} key "${id}" names an invalid ${scopeNoun} "${s}"`);
     }
     return { id, secret, role: effectiveRole, scopes };
   });

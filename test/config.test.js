@@ -39,6 +39,7 @@ test('parseApiKeys: role[:scopes] format (ratelimit/geo/flags/search/scheduler/w
 
   assert.throws(() => parseApiKeys('id:' + 'a'.repeat(32) + ':bogus', 'X_API_KEYS', { roles }), ConfigError, 'role not in roles list');
   assert.throws(() => parseApiKeys('id:' + 'a'.repeat(32) + ':read:BAD', 'X_API_KEYS', { roles, scopePattern: /^[a-z]+$/ }), ConfigError, 'scope fails pattern');
+  assert.throws(() => parseApiKeys('id:' + 'a'.repeat(32) + ':read:BAD', 'RATELIMIT_API_KEYS', { roles, scopePattern: /^[a-z]+$/, scopeNoun: 'policy' }), (/** @type {any} */ e) => /invalid policy/.test(e.message), 'scopeNoun customizes the error wording per service (ratelimit says "policy", search says "index")');
   assert.throws(() => parseApiKeys('short:tooshort', 'X_API_KEYS', { roles }), ConfigError, 'secret under minSecretLength');
   assert.throws(() => parseApiKeys('', 'X_API_KEYS', { roles }), ConfigError, 'no keys at all');
   assert.throws(() => parseApiKeys(`a:${'x'.repeat(32)},a:${'y'.repeat(32)}`, 'X_API_KEYS', { roles }), ConfigError, 'duplicate id');
