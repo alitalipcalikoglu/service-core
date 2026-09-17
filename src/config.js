@@ -75,9 +75,11 @@ export class EnvReader {
 /**
  * Parse `id:secret[:role[:scopeList]]` entries, comma separated. Two current shapes are supported
  * by the same function depending on whether `roles` is passed:
- * - `roles` given (ratelimit/geo/flags/search/scheduler/shortlink/webhook-out/audit today): role is
- *   the 3rd field, defaults to `readwrite`; a 4th field is a `+`-separated scope list validated
- *   against `scopePattern` when given (`null` scope means "every scope").
+ * - `roles` given and `scopePattern` given (ratelimit/search/flags today): role is the 3rd field,
+ *   defaults to `readwrite`; a 4th field is a `+`-separated scope list validated against
+ *   `scopePattern` (`null` scope means "every scope").
+ * - `roles` given, no `scopePattern` (geo/audit/scheduler/shortlink/webhook-out today): role only,
+ *   `id:secret[:role]` — a 4th field is rejected, there is no scope concept for these services.
  * - `roles` omitted (auth/media/notify today): plain `id:secret`, no role or scope concept at all —
  *   every returned entry has `role: undefined, scopes: null`.
  * @param {string} raw
@@ -86,13 +88,13 @@ export class EnvReader {
  * @returns {{ id: string, secret: string, role: string|undefined, scopes: string[]|null }[]}
  */
 export function parseApiKeys(raw, envName, { roles, scopePattern, scopeNoun = 'scope', minSecretLength = 32 } = {}) {
-  const maxParts = roles ? 4 : 2;
+  const maxParts = !roles ? 2 : (scopePattern ? 4 : 3);
   const keys = raw.split(',').map((s) => s.trim()).filter(Boolean).map((entry) => {
     const parts = entry.split(':');
     if (parts.length < 2 || parts.length > maxParts) {
-      throw new ConfigError(roles
-        ? `${envName} entry "${entry.slice(0, 8)}…" must be id:secret[:role[:scopes]]`
-        : `${envName} entry "${entry.slice(0, 8)}…" must be id:secret`);
+      throw new ConfigError(!roles
+        ? `${envName} entry "${entry.slice(0, 8)}…" must be id:secret`
+        : `${envName} entry "${entry.slice(0, 8)}…" must be id:secret[:role${scopePattern ? '[:scopes]' : ''}]`);
     }
     const [id, secret, role, scopeList] = parts;
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new ConfigError(`${envName} id "${id}" must match [A-Za-z0-9_-]{1,64}`);

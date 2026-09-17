@@ -46,6 +46,13 @@ test('parseApiKeys: role[:scopes] format (ratelimit/geo/flags/search/scheduler/w
   assert.throws(() => parseApiKeys(`a:${'x'.repeat(32)},b:${'x'.repeat(32)}`, 'X_API_KEYS', { roles }), ConfigError, 'duplicate secret');
 });
 
+test('parseApiKeys: roles given, no scopePattern (geo/audit/scheduler/shortlink/webhook-out today) — role only, a 4th field is rejected', () => {
+  const roles = ['read', 'write', 'readwrite'];
+  const [k] = parseApiKeys('id:' + 'a'.repeat(32) + ':read', 'GEO_API_KEYS', { roles });
+  assert.deepEqual(k, { id: 'id', secret: 'a'.repeat(32), role: 'read', scopes: null });
+  assert.throws(() => parseApiKeys('id:' + 'a'.repeat(32) + ':read:extra', 'GEO_API_KEYS', { roles }), (/** @type {any} */ e) => /id:secret\[:role\]$/.test(e.message), 'no scope concept: message has no [:scopes] suffix, a 4th part is rejected outright');
+});
+
 test('parseApiKeys: extra roles/scope-less services (ratelimit\'s "check" role, webhook-out\'s "publish" role) are just data', () => {
   const [k] = parseApiKeys('id:' + 'a'.repeat(32) + ':check', 'RATELIMIT_API_KEYS', { roles: ['check', 'read', 'write', 'readwrite'] });
   assert.equal(k.role, 'check');
