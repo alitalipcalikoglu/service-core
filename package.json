@@ -1,6 +1,6 @@
 {
   "name": "@atc-web/service-core",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "Shared cross-cutting infrastructure for atc-web services: config parsing, SQLite base class, audit forwarding, API-key auth, outbound HTTP guard/signing, process lifecycle, Fastify helpers. No domain logic.",
   "license": "MIT",
   "repository": {
@@ -16,6 +16,7 @@
     "./auth": "./src/api-key-auth.js",
     "./http": "./src/http.js",
     "./lifecycle": "./src/lifecycle.js",
+    "./log": "./src/console-logger.js",
     "./fastify": "./src/fastify-helpers.js",
     "./secrets": "./src/secret-box.js"
   },
