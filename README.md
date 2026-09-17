@@ -6,15 +6,23 @@ Shared cross-cutting infrastructure for the [atc-web](https://github.com/alitali
 
 Every atc-web service is its own independent repository (`atc-web/<name>/`, copy the folder, `npm ci`, run). That independence is deliberate, but it meant roughly 450 lines of identical or near-identical infrastructure code were copied into each one — a change to the audit-retry policy needed a commit in 11 repositories. This package extracts exactly the parts that really are identical or safely parameterizable, and leaves everything with real per-service behavior (differing key formats, differing shutdown order, differing signing schemes) where it was. Adopted by all 12 stateful services (ratelimit, geo, search, flags, shortlink, audit, media, notify, scheduler, webhook-out, auth, console). See each source repository's `docs/READINESS.md` for what that service specifically adopted, and its own commit message for the exact compatibility decisions made.
 
+## Boundaries
+
+**Purpose:** shared, generic cross-cutting infrastructure — config parsing, a SQLite base class with migration/backup mechanics, audit-forwarding client, API-key auth, outbound HTTP guard/signing, process lifecycle, Fastify helpers, `/v1/info` registration.
+
+**Responsibilities:** everything above, as composable classes/functions a service imports and wires itself.
+
+**Non-responsibilities:** service-core ≠ domain framework — no service-specific table names, route names, or business rules live here, and it defines no app factory a service inherits its whole shape from; each service still builds its own `Fastify(...)` instance, schema and domain logic. See "What deliberately stayed local" below for concrete examples of things that look shareable but were deliberately kept out.
+
 ## Install
 
 Not published to any registry — installed straight from GitHub, pinned to a tag:
 
 ```
-npm install github:alitalipcalikoglu/service-core#v1.4.1
+npm install github:alitalipcalikoglu/service-core#v1.10.0
 ```
 
-A service's `package.json` then has `"@atc-web/service-core": "github:alitalipcalikoglu/service-core#v1.4.1"`, and `npm ci` resolves and clones that exact tagged commit — no private registry, no simultaneous-upgrade requirement across services. Every consuming service pins its own tag independently; see [VERSIONING.md](VERSIONING.md).
+A service's `package.json` then has `"@atc-web/service-core": "github:alitalipcalikoglu/service-core#v1.10.0"`, and `npm ci` resolves and clones that exact tagged commit — no private registry, no simultaneous-upgrade requirement across services. Every consuming service pins its own tag independently; see [VERSIONING.md](VERSIONING.md).
 
 ## Modules
 
@@ -27,7 +35,7 @@ Each is a separate `exports` subpath so a service only pulls in what it uses. "A
 | `@atc-web/service-core/audit` | `AuditClient` — buffered/batched mode (fail-safe forwarding to the audit service) for most services, or outbox mode (`{ outbox }`) for a service with a durability requirement on the event itself — see below | 11/12 (not audit itself) |
 | `@atc-web/service-core/auth` | `ApiKeyAuth` (bearer key auth; decoration shape and role rules are options) | 11/12 (not console — session+TOTP admin auth, no API keys) |
 | `@atc-web/service-core/lifecycle` | `Lifecycle.install(...)` — signal handling, ordered shutdown steps, force-exit | 12/12 |
-| `@atc-web/service-core/fastify` | `jsonParser`, `createErrorHandler`, `registerProbes`, `metricsText` | 11/12 (not console — see below) |
+| `@atc-web/service-core/fastify` | `jsonParser`, `createErrorHandler`, `registerProbes`, `metricsText`, `registerInfo`/`readServiceVersion`/`SERVICE_CORE_VERSION` (Stage 7: `/v1/info`) | 12/12 (including console, via `registerInfo` directly — see below) |
 | `@atc-web/service-core/http` | `HttpCaller`, `CallError`, `NetGuard`, `NetGuardError`, `Signer` | 2/12 (scheduler, webhook-out — the only two services that make caller-supplied outbound HTTP calls) |
 | `@atc-web/service-core/secrets` | `SecretBox` — AES-256-GCM sealing of a small secret at rest, versioned format (`v1.` single-key; `v2.` embeds a `keyId` for a caller managing more than one key — e.g. rotation), key supplied by the caller (never stored in the database) | 2/12 (webhook-out on `v1.`, console on `v2.` — its own `TotpKeyring` builds the current/previous rotation logic on top; this stays a single-key primitive) |
 
