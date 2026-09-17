@@ -1,44 +1,53 @@
 # service-core
 
-Shared cross-cutting infrastructure for the [atc-web](https://github.com/alitalipcalikoglu?tab=repositories) services: config parsing, a SQLite base class, audit-event forwarding, API-key auth, W3C trace-context handling, an outbound SSRF guard/signer/HTTP transport, graceful process shutdown, and small Fastify helpers. No domain logic, no service orchestration, no app factory — every service still owns its own `Fastify(...)` instance, schema, and business rules.
+Shared cross-cutting infrastructure for the [atc-web](https://github.com/alitalipcalikoglu?tab=repositories) services: config parsing, a SQLite base class, audit-event forwarding, API-key auth, an outbound SSRF guard/signer/HTTP transport, graceful process shutdown, and small Fastify helpers. No domain logic, no service orchestration, no app factory — every service still owns its own `Fastify(...)` instance, schema, and business rules.
 
 ## Why this exists
 
-Every atc-web service is its own independent repository (`atc-web/<name>/`, copy the folder, `npm ci`, run). That independence is deliberate, but it meant roughly 450 lines of identical or near-identical infrastructure code were copied into each one — a change to the audit-retry policy needed a commit in 11 repositories. This package extracts exactly the parts that really are identical or safely parameterizable, and leaves everything with real per-service behavior (differing key formats, differing shutdown order, differing signing schemes) where it was. See each source repository's `docs/READINESS.md` for what that service specifically adopted.
+Every atc-web service is its own independent repository (`atc-web/<name>/`, copy the folder, `npm ci`, run). That independence is deliberate, but it meant roughly 450 lines of identical or near-identical infrastructure code were copied into each one — a change to the audit-retry policy needed a commit in 11 repositories. This package extracts exactly the parts that really are identical or safely parameterizable, and leaves everything with real per-service behavior (differing key formats, differing shutdown order, differing signing schemes) where it was. Adopted by all 12 stateful services (ratelimit, geo, search, flags, shortlink, audit, media, notify, scheduler, webhook-out, auth, console). See each source repository's `docs/READINESS.md` for what that service specifically adopted, and its own commit message for the exact compatibility decisions made.
 
 ## Install
 
 Not published to any registry — installed straight from GitHub, pinned to a tag:
 
 ```
-npm install github:alitalipcalikoglu/service-core#v1.0.0
+npm install github:alitalipcalikoglu/service-core#v1.4.1
 ```
 
-A service's `package.json` then has `"@atc-web/service-core": "github:alitalipcalikoglu/service-core#v1.0.0"`, and `npm ci` resolves and clones that exact tagged commit — no private registry, no simultaneous-upgrade requirement across services. See [VERSIONING.md](VERSIONING.md).
+A service's `package.json` then has `"@atc-web/service-core": "github:alitalipcalikoglu/service-core#v1.4.1"`, and `npm ci` resolves and clones that exact tagged commit — no private registry, no simultaneous-upgrade requirement across services. Every consuming service pins its own tag independently; see [VERSIONING.md](VERSIONING.md).
 
 ## Modules
 
-Each is a separate `exports` subpath so a service only pulls in what it uses:
+Each is a separate `exports` subpath so a service only pulls in what it uses. "Adopters" counts real, current importers, not services that merely *could* use it.
 
-| Import | Contents |
-|---|---|
-| `@atc-web/service-core/config` | `EnvReader`, `ConfigError`, `parseApiKeys`, `parseAudit`, `parseTarget` |
-| `@atc-web/service-core/db` | `Database` (subclass with your own `static MIGRATIONS`), `StatementCache` |
-| `@atc-web/service-core/audit` | `AuditClient` (buffered, batched, fail-safe forwarding to the audit service) |
-| `@atc-web/service-core/auth` | `ApiKeyAuth` (bearer key auth; decoration shape and role rules are options) |
-| `@atc-web/service-core/context` | `TraceContext` (W3C `traceparent` parse/generate, trust-boundary aware) |
-| `@atc-web/service-core/http` | `HttpCaller`, `CallError`, `NetGuard`, `NetGuardError`, `Signer` |
-| `@atc-web/service-core/lifecycle` | `Lifecycle.install(...)` — signal handling, ordered shutdown steps, force-exit |
-| `@atc-web/service-core/fastify` | `jsonParser`, `createErrorHandler`, `registerProbes`, `metricsText` |
+| Import | Contents | Adopters |
+|---|---|---|
+| `@atc-web/service-core/config` | `EnvReader`, `ConfigError`, `parseApiKeys`, `parseAudit`, `parseTarget` | 12/12 |
+| `@atc-web/service-core/db` | `Database` (subclass with your own `static MIGRATIONS`) | 12/12 |
+| `@atc-web/service-core/audit` | `AuditClient` (buffered, batched, fail-safe forwarding to the audit service) | 11/12 (not audit itself — it doesn't audit itself) |
+| `@atc-web/service-core/auth` | `ApiKeyAuth` (bearer key auth; decoration shape and role rules are options) | 11/12 (not console — session+TOTP admin auth, no API keys) |
+| `@atc-web/service-core/lifecycle` | `Lifecycle.install(...)` — signal handling, ordered shutdown steps, force-exit | 12/12 |
+| `@atc-web/service-core/fastify` | `jsonParser`, `createErrorHandler`, `registerProbes`, `metricsText` | 11/12 (not console — see below) |
+| `@atc-web/service-core/http` | `HttpCaller`, `CallError`, `NetGuard`, `NetGuardError`, `Signer` | 2/12 (scheduler, webhook-out — the only two services that make caller-supplied outbound HTTP calls) |
 
 Every module's own JSDoc explains the exact contract and which per-service behavior stays local (e.g. `ApiKeyAuth`'s `decorate` option, `Lifecycle`'s caller-supplied `steps` order, `createErrorHandler`'s `extra` hook).
 
+### Removed before Stage 2 closed: zero-adopter modules
+
+Two modules were built and shipped mid-stage on the assumption a real consumer would land, then removed once Stage 2's actual adoption order made clear neither one would:
+
+- **`context` (`TraceContext`)** — moved here from gateway's own `trace-context.js` early in Stage 2. But gateway itself was never in Stage 2's adoption order (it's stateless, no config/db/audit/lifecycle module applies to it the same way), and no other service does `traceparent` handling. Zero real adopters; removed rather than shipped as a speculative export. Gateway kept its own original file, unchanged, throughout.
+- **`db`'s `StatementCache`** — a generalization of the ad hoc `Map`-based statement-caching idiom a couple of stores used. Every actual store, audit's `EventStore` included, kept its own existing pattern rather than adopting it (see audit's Stage 2 commit) — the shapes didn't match closely enough to be worth forcing. Zero real adopters; removed. The one genuinely load-bearing lesson from that idiom (never cache a statement used with `.iterate()`) is kept as a doc comment on `Database` instead of a class nobody used.
+
 ## What deliberately stayed local
 
-Not everything that looks similar across services moved here — see `stack/docs/ARCHITECTURE_AUDIT.md`'s Stage 2 section for the full accounting:
+Not everything that looks similar across services moved here — see `stack/docs/ARCHITECTURE_AUDIT.md`'s Stage 2 section and each service's own adoption commit for the full accounting:
 
-- **notify's outbound webhook signing** (`channels/webhook.js`) was not migrated to this package's `Signer`/`HttpCaller`. Its signature verification uses `Buffer.prototype.equals` instead of a timing-safe comparison — a known, already-tracked defect (see `ARCHITECTURE_AUDIT.md`) scheduled for its own fix in a later stage. Adopting core's (correct) `Signer` here would have silently changed that behavior as a side effect of an "extraction" stage, which is exactly the kind of unintended change this package's adoption process is designed to avoid.
-- **`crypto/password.js`, `crypto/opaque-token.js`** (auth ↔ console), **`rate-limiter.js`** (gateway ↔ console) and **`maintenance.js`** (auth/console/flags/shortlink/media/audit) are duplicated but were not pulled into this package — each is domain-adjacent enough (password hashing policy, a specific rate-limit algorithm, per-service maintenance windows) that centralizing it risked exactly the "giant framework" this package is meant not to become. They remain candidates for a future, separately-scoped extraction.
+- **notify's outbound webhook signing** (`channels/webhook.js`) was not migrated to this package's `Signer`/`HttpCaller`. Its signature verification uses `Buffer.prototype.equals` instead of a timing-safe comparison — a known, already-tracked defect scheduled for its own fix in a later stage. Adopting core's (correct) `Signer` would have silently changed that behavior as a side effect of an "extraction" stage.
+- **auth's error handler and JWT/password/session logic** — the login-lockout `retry-after` header lives inside the same branch `createErrorHandler` would dispatch on, not a separately classed case its `extra` hook cleanly covers; forcing that shape would touch security-relevant response behavior. All of JWT signing, password hashing and session/token stores were never candidates — this package has no such modules and none of it is cross-cutting.
+- **console's readiness and error handling** — console's `/ready` checks live on every call with no cache window (every other service caches for 10–30s); its error handler dispatches on two domain classes with a `service` field on one of them. Genuinely different shapes, left local rather than forced.
+- **scheduler's and webhook-out's domain delivery logic** — only the pinned-socket transport (`HttpCaller.send()`) and the SSRF guard (`NetGuard`) are shared. Arbitrary HTTP method and bearer-token-by-name lookup (scheduler), always-POST multi-secret signing and `x-webhook-*` headers (webhook-out), and each service's own retry/backoff policy stay in that service's own (now thinner) `net/http-caller.js`.
+- **`crypto/password.js`, `crypto/opaque-token.js`** (auth ↔ console), **`rate-limiter.js`** (gateway ↔ console) and **`maintenance.js`** (auth/console/flags/shortlink/media/audit) are duplicated but were not pulled into this package — each is domain-adjacent enough (password hashing policy, a specific rate-limit algorithm, per-service maintenance windows) that centralizing it risked exactly the "giant framework" this package is meant not to become. They remain candidates for a future, separately-scoped extraction, not attempted here.
 
 ## License
 

@@ -17,6 +17,14 @@ import { DatabaseSync } from 'node:sqlite';
  * `#migrate()` reads `MIGRATIONS` off the actual subclass (`this.constructor.MIGRATIONS`), so a
  * service that defines no migrations at all (there is none today, but the base class must not
  * assume one exists) simply gets an empty array via the default below.
+ *
+ * This class does not cache prepared statements — every service already had its own idiom for that
+ * (either a fixed set of named statements prepared once, or an ad hoc `Map` for dynamic SQL) and
+ * none of them turned out to share the same shape closely enough to be worth a generic cache class
+ * here. One gotcha worth keeping regardless of who does the caching: never reuse a cached statement
+ * for `.iterate()` — `StatementSync#iterate()` keeps cursor state on the statement object itself, so
+ * two concurrent `.iterate()` calls sharing one cached statement reset each other's cursor (the bug
+ * Stage 0 fixed in audit's `EventStore.iterate()`). Prepare a fresh statement per `.iterate()` call.
  */
 export class Database {
   /** @type {readonly string[]} */
@@ -87,35 +95,5 @@ export class Database {
 
   close() {
     this.raw.close();
-  }
-}
-
-/**
- * A `Map<sql, StatementSync>` cache for queries built from dynamic SQL text (e.g. an optional
- * `WHERE` clause assembled per call) — generalizes the ad hoc `#cached` idiom every store with
- * filtered search previously wrote by hand.
- *
- * **Never cache a statement used with `.iterate()`.** `StatementSync#iterate()` keeps state on the
- * prepared statement object itself; two concurrent `iterate()` calls sharing one cached statement
- * reset each other's cursor (this is the exact bug Stage 0 fixed in audit's `EventStore.iterate()`
- * — the fix was to stop going through the cache for that one call site). Prepare a fresh statement
- * for `.iterate()` every time; use this cache only for `.get()`/`.all()`/`.run()`.
- */
-export class StatementCache {
-  /** @param {{ prepare: (sql: string) => import('node:sqlite').StatementSync }} db */
-  constructor(db) {
-    this.db = db;
-    /** @type {Map<string, import('node:sqlite').StatementSync>} */
-    this.cache = new Map();
-  }
-
-  /** @param {string} sql */
-  get(sql) {
-    let stmt = this.cache.get(sql);
-    if (!stmt) {
-      stmt = this.db.prepare(sql);
-      this.cache.set(sql, stmt);
-    }
-    return stmt;
   }
 }

@@ -10,8 +10,12 @@ import { test } from 'node:test';
  */
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
-test('package.json declares the exact subpaths named in the Stage 2 module table', () => {
-  assert.deepEqual(Object.keys(pkg.exports).sort(), ['./audit', './auth', './config', './context', './db', './fastify', './http', './lifecycle'].sort());
+test('package.json declares the exact subpaths this package actually has real adopters for', () => {
+  // No "./context" here: TraceContext was moved from gateway into core during Stage 2 on the
+  // assumption gateway (or some other service) would adopt it, but gateway was never in Stage 2's
+  // adoption order and no service ended up needing it. Zero real consumers -> removed before
+  // Stage 2 closed rather than shipped as a speculative, unused abstraction.
+  assert.deepEqual(Object.keys(pkg.exports).sort(), ['./audit', './auth', './config', './db', './fastify', './http', './lifecycle'].sort());
 });
 
 test('every subpath resolves and exports its documented members', async () => {
@@ -22,16 +26,13 @@ test('every subpath resolves and exports its documented members', async () => {
   assert.equal(typeof config.parseTarget, 'function');
 
   const db = await import('../src/db.js');
-  assert.ok(db.Database && db.StatementCache);
+  assert.ok(db.Database);
 
   const audit = await import('../src/audit-client.js');
   assert.ok(audit.AuditClient && typeof audit.AuditClient.hook === 'function' && typeof audit.AuditClient.route === 'function');
 
   const auth = await import('../src/api-key-auth.js');
   assert.ok(auth.ApiKeyAuth && typeof auth.ApiKeyAuth.require === 'function' && typeof auth.ApiKeyAuth.assertScope === 'function');
-
-  const context = await import('../src/trace-context.js');
-  assert.ok(context.TraceContext && typeof context.TraceContext.forRequest === 'function');
 
   const http = await import('../src/http.js');
   assert.ok(http.HttpCaller && http.CallError && http.NetGuard && http.NetGuardError && http.Signer);

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Database, StatementCache } from '../src/db.js';
+import { Database } from '../src/db.js';
 
 test('Database: subclass MIGRATIONS is applied, PRAGMAs set, transaction/ping/sizeBytes/close work', () => {
   class TestDb extends Database {
@@ -39,18 +39,4 @@ test('Database: a migration that throws rolls back and the error propagates (sta
     static MIGRATIONS = ['NOT VALID SQL ;;;'];
   }
   assert.throws(() => new Bad(':memory:'));
-});
-
-test('StatementCache: same SQL text returns the same prepared statement, different text a different one', () => {
-  class TestDb extends Database {
-    static MIGRATIONS = ['CREATE TABLE t (id INTEGER)'];
-  }
-  const db = new TestDb(':memory:');
-  const cache = new StatementCache(db);
-  const a1 = cache.get('SELECT * FROM t WHERE id = 1');
-  const a2 = cache.get('SELECT * FROM t WHERE id = 1');
-  const b = cache.get('SELECT * FROM t WHERE id = 2');
-  assert.equal(a1, a2, 'identical SQL text is cached');
-  assert.notEqual(a1, b, 'different SQL text is a different statement');
-  db.close();
 });
