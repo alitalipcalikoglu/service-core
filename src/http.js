@@ -1,6 +1,8 @@
 import http from 'node:http';
 import https from 'node:https';
 
+/** @typedef {import('./net-guard.js').VettedTarget} VettedTarget */
+
 /**
  * Thrown by {@link HttpCaller.send}. Every current per-service `CallError` (scheduler, webhook-out)
  * has this exact shape; a service can keep re-exporting its own name for it if call sites already
