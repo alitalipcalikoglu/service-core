@@ -73,14 +73,24 @@ export function requestOptions({ logger = null, logLevel = 'info', extraRedact =
  * exactly the condition under which trusting that same hop's `traceparent` is sound. **This value
  * is never consulted for an authentication, authorization, rate-limit or tenant decision** —
  * request-id trust and API-key auth are both completely unaffected by this function.
+ *
+ * Uses `setChildLoggerFactory`, not an `onRequest` hook that reassigns `request.log` — verified
+ * empirically that the latter does NOT work for this: Fastify's own built-in "incoming request"/
+ * "request completed" lines are emitted through a logger reference resolved at request-log
+ * *creation* time, before any `onRequest` hook runs, so a later reassignment inside a hook is
+ * invisible to them (it only reaches log calls a route handler makes itself, afterward).
+ * `childLoggerFactory` runs exactly at that creation point instead — its `bindings` argument
+ * already carries the real, resolved request id (Fastify's own default factory puts it there
+ * first), so every log line for this request, including the automatic ones, carries
+ * `traceId`/`spanId` with zero per-call-site changes anywhere.
  * @param {import('fastify').FastifyInstance} app
  * @param {{ trustProxy: boolean }} o
  */
 export function registerRequestContext(app, { trustProxy }) {
-  app.addHook('onRequest', async (request) => {
-    const trace = TraceContext.forRequest(request.headers.traceparent, trustProxy);
-    RequestContext.enterWith(new RequestContext({ requestId: String(request.id), trace }));
-    request.log = request.log.child({ traceId: trace.traceId, spanId: trace.spanId });
+  app.setChildLoggerFactory(function (logger, bindings, opts, rawReq) {
+    const trace = TraceContext.forRequest(rawReq.headers.traceparent, trustProxy);
+    RequestContext.enterWith(new RequestContext({ requestId: String(bindings.reqId ?? ''), trace }));
+    return logger.child({ ...bindings, traceId: trace.traceId, spanId: trace.spanId }, opts);
   });
 }
 

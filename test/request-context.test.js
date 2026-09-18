@@ -103,6 +103,18 @@ test('registerRequestContext + requestOptions, wired into a real Fastify app: re
   assert.match(logged.traceId, HEX32);
   assert.match(logged.spanId, HEX16);
 
+  // Fastify's OWN built-in request logging — never an explicit request.log call anywhere — also
+  // carries traceId/spanId, because registerRequestContext hooks logger *creation* itself
+  // (setChildLoggerFactory), not a later request.log reassignment a hook can't retroactively
+  // apply to lines Fastify already emitted through its own earlier-captured reference.
+  const incoming = lines.find((l) => l.msg === 'incoming request' && l.reqId === 'custom-caller-id');
+  assert.ok(incoming, `expected a built-in "incoming request" line. Lines: ${JSON.stringify(lines)}`);
+  assert.match(incoming.traceId, HEX32);
+  const completed = lines.find((l) => l.msg === 'request completed' && l.reqId === 'custom-caller-id');
+  assert.ok(completed, 'expected a built-in "request completed" line');
+  assert.equal(completed.traceId, incoming.traceId, 'same trace across both automatic log lines for the one request');
+  assert.equal(completed.spanId, incoming.spanId);
+
   await app.close();
 });
 
