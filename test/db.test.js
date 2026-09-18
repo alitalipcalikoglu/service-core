@@ -80,7 +80,7 @@ test('Database: fresh file and an upgraded existing file run through the same mi
     assert.equal(upgraded.schemaVersion, 2);
     assert.equal(/** @type {any} */ (upgraded.prepare('SELECT v FROM t WHERE id = 1').get()).v, 'a', 'existing row survives the upgrade');
     assert.ok(upgraded.lastBackupPath && existsSync(upgraded.lastBackupPath), 'an upgrade of existing data is snapshotted first');
-    assert.match(upgraded.lastBackupPath ?? '', /app\.db\.pre-v1-\d+$/);
+    assert.match(upgraded.lastBackupPath ?? '', /app\.db\.pre-v1-\d+-\d+$/, 'timestamp-pid suffix (Phase 1: collision-proof across two processes backing up the same transition concurrently)');
 
     const snapshot = new (class extends Database { static MIGRATIONS = V1.MIGRATIONS; })(/** @type {string} */ (upgraded.lastBackupPath));
     assert.equal(/** @type {any} */ (snapshot.prepare('SELECT v FROM t WHERE id = 1').get()).v, 'a', 'snapshot is a valid, independently-openable v1 database');
