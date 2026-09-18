@@ -11,11 +11,13 @@ import { test } from 'node:test';
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 test('package.json declares the exact subpaths this package actually has real adopters for', () => {
-  // No "./context" here: TraceContext was moved from gateway into core during Stage 2 on the
-  // assumption gateway (or some other service) would adopt it, but gateway was never in Stage 2's
-  // adoption order and no service ended up needing it. Zero real consumers -> removed before
-  // Stage 2 closed rather than shipped as a speculative, unused abstraction.
-  assert.deepEqual(Object.keys(pkg.exports).sort(), ['./audit', './auth', './config', './db', './fastify', './http', './lifecycle', './log', './secrets'].sort());
+  // "./trace" + "./request-context": post-production Phase 5. A prior attempt at this exact idea
+  // (TraceContext moved into core during Stage 2) was removed before Stage 2 closed for having
+  // zero real adopters — gateway was never in Stage 2's adoption order and no service ended up
+  // needing it, so it shipped speculative and was cut. This time it has concrete adopters (all 11
+  // backend Fastify consumers plus console), driven by a real audit finding with tested trust
+  // semantics, not speculative infrastructure.
+  assert.deepEqual(Object.keys(pkg.exports).sort(), ['./audit', './auth', './config', './db', './fastify', './http', './lifecycle', './log', './secrets', './trace', './request-context'].sort());
 });
 
 test('every subpath resolves and exports its documented members', async () => {
@@ -54,6 +56,15 @@ test('every subpath resolves and exports its documented members', async () => {
 
   const log = await import('../src/console-logger.js');
   assert.ok(log.ConsoleLogger);
+
+  const trace = await import('../src/trace-context.js');
+  assert.ok(trace.TraceContext && typeof trace.TraceContext.parse === 'function' && typeof trace.TraceContext.forRequest === 'function');
+
+  const requestContext = await import('../src/request-context.js');
+  assert.ok(requestContext.RequestContext && typeof requestContext.RequestContext.run === 'function' && typeof requestContext.RequestContext.get === 'function');
+
+  assert.equal(typeof fastifyHelpers.requestOptions, 'function');
+  assert.equal(typeof fastifyHelpers.registerRequestContext, 'function');
 });
 
 test('each exports entry points at a file that exists', () => {

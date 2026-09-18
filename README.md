@@ -19,10 +19,10 @@ Every atc-web service is its own independent repository (`atc-web/<name>/`, copy
 Not published to any registry — installed straight from GitHub, pinned to a tag:
 
 ```
-npm install github:alitalipcalikoglu/service-core#v1.10.0
+npm install github:alitalipcalikoglu/service-core#v1.11.0
 ```
 
-A service's `package.json` then has `"@atc-web/service-core": "github:alitalipcalikoglu/service-core#v1.10.0"`, and `npm ci` resolves and clones that exact tagged commit — no private registry, no simultaneous-upgrade requirement across services. Every consuming service pins its own tag independently; see [VERSIONING.md](VERSIONING.md).
+A service's `package.json` then has `"@atc-web/service-core": "github:alitalipcalikoglu/service-core#v1.11.0"`, and `npm ci` resolves and clones that exact tagged commit — no private registry, no simultaneous-upgrade requirement across services. Every consuming service pins its own tag independently; see [VERSIONING.md](VERSIONING.md).
 
 ## Modules
 
@@ -35,9 +35,11 @@ Each is a separate `exports` subpath so a service only pulls in what it uses. "A
 | `@atc-web/service-core/audit` | `AuditClient` — buffered/batched mode (fail-safe forwarding to the audit service) for most services, or outbox mode (`{ outbox }`) for a service with a durability requirement on the event itself — see below | 11/12 (not audit itself) |
 | `@atc-web/service-core/auth` | `ApiKeyAuth` (bearer key auth; decoration shape and role rules are options) | 11/12 (not console — session+TOTP admin auth, no API keys) |
 | `@atc-web/service-core/lifecycle` | `Lifecycle.install(...)` — signal handling, ordered shutdown steps, force-exit | 12/12 |
-| `@atc-web/service-core/fastify` | `jsonParser`, `createErrorHandler`, `registerProbes`, `metricsText`, `registerInfo`/`readServiceVersion`/`SERVICE_CORE_VERSION` (Stage 7: `/v1/info`) | 12/12 (including console, via `registerInfo` directly — see below) |
+| `@atc-web/service-core/fastify` | `jsonParser`, `createErrorHandler`, `registerProbes`, `metricsText`, `registerInfo`/`readServiceVersion`/`SERVICE_CORE_VERSION` (Stage 7: `/v1/info`); `requestOptions`/`registerRequestContext` (Phase 5: the shared `requestIdHeader`/`genReqId`/logger block, and the per-request `RequestContext` + trace-aware log binding) | 12/12 (including console, via `registerInfo` directly — see below) |
 | `@atc-web/service-core/http` | `HttpCaller`, `CallError`, `NetGuard`, `NetGuardError`, `Signer` | 2/12 (scheduler, webhook-out — the only two services that make caller-supplied outbound HTTP calls) |
 | `@atc-web/service-core/secrets` | `SecretBox` — AES-256-GCM sealing of a small secret at rest, versioned format (`v1.` single-key; `v2.` embeds a `keyId` for a caller managing more than one key — e.g. rotation), key supplied by the caller (never stored in the database) | 2/12 (webhook-out on `v1.`, console on `v2.` — its own `TotpKeyring` builds the current/previous rotation logic on top; this stays a single-key primitive) |
+| `@atc-web/service-core/trace` | `TraceContext` — W3C `traceparent` subset parse/generate, mirroring `gateway/src/trace-context.js`'s convention exactly (source of truth; gateway itself has no dependency on this package) | 11/12 (every backend consumer; not console, which imports it indirectly via `./request-context`) |
+| `@atc-web/service-core/request-context` | `RequestContext` — `AsyncLocalStorage`-based per-request correlation state (`requestId` + `TraceContext`), explicit opt-in `propagationHeaders()` for a trusted-internal outbound call | 12/12 |
 
 Every module's own JSDoc explains the exact contract and which per-service behavior stays local (e.g. `ApiKeyAuth`'s `decorate` option, `Lifecycle`'s caller-supplied `steps` order, `createErrorHandler`'s `extra` hook).
 
@@ -61,7 +63,7 @@ Delivery is at-least-once either way (buffered or outbox): a crash between a suc
 
 Two modules were built and shipped mid-stage on the assumption a real consumer would land, then removed once Stage 2's actual adoption order made clear neither one would:
 
-- **`context` (`TraceContext`)** — moved here from gateway's own `trace-context.js` early in Stage 2. But gateway itself was never in Stage 2's adoption order (it's stateless, no config/db/audit/lifecycle module applies to it the same way), and no other service does `traceparent` handling. Zero real adopters; removed rather than shipped as a speculative export. Gateway kept its own original file, unchanged, throughout.
+- **`context` (`TraceContext`)** — moved here from gateway's own `trace-context.js` early in Stage 2. But gateway itself was never in Stage 2's adoption order (it's stateless, no config/db/audit/lifecycle module applies to it the same way), and no other service did `traceparent` handling at the time. Zero real adopters; removed rather than shipped as a speculative export. Gateway kept its own original file, unchanged, throughout. **Re-added in post-production Phase 5** as `./trace` + `./request-context`, this time with concrete adopters (all 11 backend Fastify consumers plus console) driven by a real audit finding, not a repeat of the same speculative bet — gateway still has no dependency on this package and still keeps its own, independent, behaviourally-identical copy.
 - **`db`'s `StatementCache`** — a generalization of the ad hoc `Map`-based statement-caching idiom a couple of stores used. Every actual store, audit's `EventStore` included, kept its own existing pattern rather than adopting it (see audit's Stage 2 commit) — the shapes didn't match closely enough to be worth forcing. Zero real adopters; removed. The one genuinely load-bearing lesson from that idiom (never cache a statement used with `.iterate()`) is kept as a doc comment on `Database` instead of a class nobody used.
 
 ## What deliberately stayed local

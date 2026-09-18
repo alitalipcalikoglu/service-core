@@ -1,9 +1,17 @@
 /**
  * Pure Fastify helpers shared by every service that owns an HTTP API — no app factory here (each
- * service still builds its own `Fastify(...)` instance, since TLS options, body limits and the
- * request-id generator are per-service config, not infrastructure to centralize).
+ * service still builds its own `Fastify(...)` instance; TLS options and body limits stay
+ * per-service config). Post-production Phase 5: the request-id generator, previously called out
+ * here as deliberately NOT centralized, now is — see `requestOptions` below. What changed: every
+ * one of the 11 adopting services turned out to already share the exact same
+ * `requestIdHeader`/`genReqId` behavior (confirmed by re-reading all 11 before touching anything,
+ * not assumed), so centralizing it is a real dedup, not a forced one; `trustProxy`, `bodyLimit`,
+ * `ajv` and `https` stay per-service, unchanged, for the same reason they always did.
  */
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { RequestContext } from './request-context.js';
+import { TraceContext } from './trace-context.js';
 
 /**
  * The version of the service-core copy actually installed and running right now — read from this
@@ -23,6 +31,57 @@ export const SERVICE_CORE_VERSION = JSON.parse(readFileSync(new URL('../package.
  */
 export function readServiceVersion(importMetaUrl) {
   return JSON.parse(readFileSync(new URL('../package.json', importMetaUrl), 'utf8')).version;
+}
+
+/**
+ * The exact `requestIdHeader`/`genReqId`/`logger`/`loggerInstance` block every backend Fastify
+ * consumer built by hand, confirmed identical (down to the exact `x-request-id` header name and
+ * plain `randomUUID()` generator, no validation, no trust gating, no response echo — unchanged
+ * from before this existed) across all 11 real adopters before this was written. Spread into the
+ * `Fastify({...})` constructor call alongside whatever stays per-service (`trustProxy`,
+ * `bodyLimit`, `ajv`, `https`).
+ * @param {object} o
+ * @param {import('fastify').FastifyBaseLogger|null} [o.logger] `this.logger`, when the caller
+ *   already has one (worker role sharing a `ConsoleLogger`); omit/null to build one from `logLevel`.
+ * @param {string} [o.logLevel]
+ * @param {string[]} [o.extraRedact] Additional `redact` paths beyond the universal
+ *   `req.headers.authorization` — e.g. auth's own `req.headers["x-access-token"]`.
+ * @returns {{ loggerInstance: import('fastify').FastifyBaseLogger|undefined, logger: object|undefined, requestIdHeader: string, genReqId: () => string }}
+ */
+export function requestOptions({ logger = null, logLevel = 'info', extraRedact = [] } = {}) {
+  return {
+    loggerInstance: logger ?? undefined,
+    logger: logger ? undefined : { level: logLevel, redact: ['req.headers.authorization', ...extraRedact] },
+    requestIdHeader: 'x-request-id',
+    genReqId: () => randomUUID(),
+  };
+}
+
+/**
+ * Post-production Phase 5: establishes the per-request {@link RequestContext} — request id plus a
+ * {@link TraceContext} — for every inbound request, and binds `traceId`/`spanId` onto that
+ * request's own child logger so they appear on every subsequent `request.log.*` call without
+ * touching an individual call site. `enterWith`, not `run`: an `onRequest` hook has no "rest of
+ * this unit of work" callback to wrap, only a continuation — the same approach console's own
+ * pre-Phase-5 context already used and proved out.
+ *
+ * `trustProxy` gates whether an inbound `traceparent` is even looked at, reusing the exact trust
+ * declaration every one of these services already makes for `X-Forwarded-For` (the same
+ * `config.trustProxy` passed to `Fastify({trustProxy: ...})` itself) — not a new trust boundary,
+ * and not a cryptographic one: an operator who sets `TRUST_PROXY=true` is already declaring "the
+ * immediate hop in front of this process is my own trusted reverse proxy/gateway", which is
+ * exactly the condition under which trusting that same hop's `traceparent` is sound. **This value
+ * is never consulted for an authentication, authorization, rate-limit or tenant decision** —
+ * request-id trust and API-key auth are both completely unaffected by this function.
+ * @param {import('fastify').FastifyInstance} app
+ * @param {{ trustProxy: boolean }} o
+ */
+export function registerRequestContext(app, { trustProxy }) {
+  app.addHook('onRequest', async (request) => {
+    const trace = TraceContext.forRequest(request.headers.traceparent, trustProxy);
+    RequestContext.enterWith(new RequestContext({ requestId: String(request.id), trace }));
+    request.log = request.log.child({ traceId: trace.traceId, spanId: trace.spanId });
+  });
 }
 
 /**
