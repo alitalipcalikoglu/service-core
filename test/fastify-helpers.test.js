@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import Fastify from 'fastify';
 import { test } from 'node:test';
-import { createErrorHandler, jsonParser, metricsText, readServiceVersion, registerInfo, registerProbes, SERVICE_CORE_VERSION } from '../src/fastify-helpers.js';
+import { createErrorHandler, jsonParser, metricsText, readServiceVersion, registerInfo, registerOpenApi, registerProbes, SERVICE_CORE_VERSION } from '../src/fastify-helpers.js';
 
 class DomainError extends Error {
   /** @param {string} code @param {number} statusCode @param {string} message @param {object} [details] */
@@ -126,6 +126,17 @@ test('registerProbes: checkReadiness may be async (notify\'s multi-channel verif
   registerProbes(app, async () => { await new Promise((r) => setTimeout(r, 5)); });
   const res = await app.inject({ method: 'GET', url: '/ready' });
   assert.deepEqual(res.json(), { status: 'ok' });
+});
+
+test('registerOpenApi: serves the exact configured bytes publicly as YAML', async () => {
+  const app = Fastify();
+  const specUrl = new URL('./fixtures/openapi.yaml', import.meta.url);
+  registerOpenApi(app, specUrl);
+  const response = await app.inject({ method: 'GET', url: '/openapi.yaml' });
+  assert.equal(response.statusCode, 200);
+  assert.match(response.headers['content-type'], /^text\/yaml; charset=utf-8/);
+  assert.equal(response.rawPayload.compare(readFileSync(specUrl)), 0);
+  await app.close();
 });
 
 test('metricsText: joins lines with a trailing newline', () => {

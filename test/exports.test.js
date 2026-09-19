@@ -46,6 +46,7 @@ test('every subpath resolves and exports its documented members', async () => {
   assert.equal(typeof fastifyHelpers.jsonParser, 'function');
   assert.equal(typeof fastifyHelpers.createErrorHandler, 'function');
   assert.equal(typeof fastifyHelpers.registerProbes, 'function');
+  assert.equal(typeof fastifyHelpers.registerOpenApi, 'function');
   assert.equal(typeof fastifyHelpers.metricsText, 'function');
   assert.equal(typeof fastifyHelpers.registerInfo, 'function');
   assert.equal(typeof fastifyHelpers.readServiceVersion, 'function');

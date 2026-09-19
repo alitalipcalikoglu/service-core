@@ -190,6 +190,23 @@ export function registerProbes(app, checkReadiness, { cacheMs = 10_000, extra } 
 }
 
 /**
+ * Registers the public, read-only canonical OpenAPI document for a service. The caller supplies
+ * a fixed file URL resolved from its own module, so the path cannot be influenced by a request.
+ * Reading at registration time deliberately makes an incomplete runtime package fail during
+ * startup instead of exposing a late, ambiguous 500 after the process is already healthy.
+ *
+ * @param {import('fastify').FastifyInstance} app
+ * @param {URL} specUrl Absolute file URL for the repository-root `openapi.yaml`.
+ */
+export function registerOpenApi(app, specUrl) {
+  const document = readFileSync(specUrl);
+  app.get('/openapi.yaml', { logLevel: 'warn' }, async (_request, reply) => {
+    reply.type('text/yaml; charset=utf-8');
+    return reply.send(document);
+  });
+}
+
+/**
  * Joins Prometheus text-format lines the way every `/metrics` route already does: one string per
  * metric/label combination, newline separated, with a trailing newline.
  * @param {string[]} lines
