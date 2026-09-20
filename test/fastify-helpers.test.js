@@ -134,7 +134,7 @@ test('registerOpenApi: serves the exact configured bytes publicly as YAML', asyn
   registerOpenApi(app, specUrl);
   const response = await app.inject({ method: 'GET', url: '/openapi.yaml' });
   assert.equal(response.statusCode, 200);
-  assert.match(response.headers['content-type'], /^text\/yaml; charset=utf-8/);
+  assert.match(String(response.headers['content-type']), /^text\/yaml; charset=utf-8/);
   assert.equal(response.rawPayload.compare(readFileSync(specUrl)), 0);
   await app.close();
 });
